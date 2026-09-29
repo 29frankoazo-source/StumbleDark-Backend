@@ -39,27 +39,40 @@ const PORT =
 
 app.use(express.json());
 
+// ---------------------------------------------------------------------------
+// Env helpers used by the MelonLoader client (IsUpdateRequired / MaintenanceSystem)
+// ---------------------------------------------------------------------------
+
 function isMaintenanceEnabled() {
     return (
-        String(process.env.MAINTENANCE_MODE)
+        String(process.env.MAINTENANCE_MODE || "false")
             .toLowerCase()
             .trim() === "true"
     );
 }
 
-app.get("/api/maintenance", (req, res) => {
-    const maintenance =
-        isMaintenanceEnabled();
+function getRequiredVersion() {
+    // Prefer REQUIRED_VERSION (what you asked for); fall back to MINIMUM_VERSION
+    return (
+        process.env.REQUIRED_VERSION ||
+        process.env.MINIMUM_VERSION ||
+        "1.0.0"
+    );
+}
 
-    const message =
+function getMaintenanceMessage() {
+    return (
         process.env.MAINTENANCE_MESSAGE ||
-        "StumbleDark is currently under maintenance. Please try again later.";
+        "Our servers are under maintenance and will be back online shortly!"
+    );
+}
 
-    return res.status(200).json({
-        maintenance,
-        message
-    });
-});
+function getUpdateMessage() {
+    return (
+        process.env.UPDATE_REQUIRED_MESSAGE ||
+        "A new version of StumbleDark is required. Please update your game."
+    );
+}
 
 function parseVersion(version) {
     if (!version) {
@@ -81,10 +94,7 @@ function parseVersion(version) {
     ];
 }
 
-function compareVersions(
-    clientVersion,
-    minimumVersion
-) {
+function compareVersions(clientVersion, minimumVersion) {
     const client =
         parseVersion(clientVersion);
 
@@ -104,17 +114,31 @@ function compareVersions(
     return 0;
 }
 
+// ---------------------------------------------------------------------------
+// Public endpoints the MelonLoader mods hit (no auth)
+// ---------------------------------------------------------------------------
+
+// MaintenanceSystem.cs → GET /api/maintenance
+app.get("/api/maintenance", (req, res) => {
+    const maintenance =
+        isMaintenanceEnabled();
+
+    return res.status(200).json({
+        maintenance,
+        message: getMaintenanceMessage()
+    });
+});
+
+// IsUpdateRequired.cs → GET /api/update-required?version=1.7.0
 app.get("/api/update-required", (req, res) => {
     const clientVersion =
         req.query.version;
 
-    const minimumVersion =
-        process.env.MINIMUM_VERSION ||
-        "1.0.0";
+    const requiredVersion =
+        getRequiredVersion();
 
     const message =
-        process.env.UPDATE_REQUIRED_MESSAGE ||
-        "A new version of StumbleDark is required. Please update your game.";
+        getUpdateMessage();
 
     if (!clientVersion) {
         return res.status(400).json({
@@ -128,9 +152,10 @@ app.get("/api/update-required", (req, res) => {
     const comparison =
         compareVersions(
             clientVersion,
-            minimumVersion
+            requiredVersion
         );
 
+    // Client is older than required → force update
     const updateRequired =
         comparison < 0;
 
@@ -138,30 +163,154 @@ app.get("/api/update-required", (req, res) => {
         "[Update Check]",
         "Client:",
         clientVersion,
-        "| Minimum:",
-        minimumVersion,
         "| Required:",
+        requiredVersion,
+        "| UpdateRequired:",
         updateRequired
     );
 
     return res.status(200).json({
         updateRequired,
         clientVersion,
-        minimumVersion,
+        minimumVersion: requiredVersion,
+        requiredVersion,
         message
     });
 });
+
+// BannedMessage.cs → GET /ban-status/:id
+// Must stay public (no auth). Returns every key variant the C# client parses.
+app.get("/ban-status/:id", async (req, res) => {
+    try {
+        const id =
+            (req.params.id || "").trim();
+
+        if (!id) {
+            return res.status(200).json({
+                isBanned: false,
+                IsBanned: false,
+                reason: "",
+                banReason: "",
+                BanReason: "",
+                BannedReason: "",
+                bannedReason: "",
+                Reason: "",
+                bannedAt: null,
+                BannedAt: null
+            });
+        }
+
+        let user =
+            await UserModel.findByDeviceId(id);
+
+        if (!user) {
+            // Also try without dashes / case variants
+            user =
+                await UserModel.findByDeviceId(
+                    id.toLowerCase()
+                );
+        }
+
+        if (!user) {
+            user =
+                await UserModel.findByDeviceId(
+                    id.toUpperCase()
+                );
+        }
+
+        if (!user) {
+            user =
+                await UserModel.findByStumbleId(id);
+        }
+
+        if (!user) {
+            user =
+                await UserModel.findByStumbleId(
+                    id.toUpperCase()
+                );
+        }
+
+        if (!user) {
+            return res.status(200).json({
+                isBanned: false,
+                IsBanned: false,
+                reason: "",
+                banReason: "",
+                BanReason: "",
+                BannedReason: "",
+                bannedReason: "",
+                Reason: "",
+                bannedAt: null,
+                BannedAt: null
+            });
+        }
+
+        const banned =
+            user.isBanned === true;
+
+        const reason =
+            user.banReason ||
+            user.BannedReason ||
+            "Banned";
+
+        const bannedAt =
+            user.bannedAt ||
+            user.BannedAt ||
+            null;
+
+        return res.status(200).json({
+            isBanned: banned,
+            IsBanned: banned,
+            reason: banned ? reason : "",
+            banReason: banned ? reason : "",
+            BanReason: banned ? reason : "",
+            BannedReason: banned ? reason : "",
+            bannedReason: banned ? reason : "",
+            Reason: banned ? reason : "",
+            bannedAt: banned ? bannedAt : null,
+            BannedAt: banned ? bannedAt : null
+        });
+    } catch (err) {
+        console.error(
+            "Ban status error:",
+            err
+        );
+
+        return res.status(500).json({
+            isBanned: false,
+            IsBanned: false,
+            reason: "",
+            banReason: "",
+            BanReason: "",
+            BannedReason: "",
+            bannedReason: "",
+            Reason: "",
+            bannedAt: null,
+            BannedAt: null
+        });
+    }
+});
+
+// ---------------------------------------------------------------------------
+// Block most routes while maintenance is on (keep the 3 public checks open)
+// ---------------------------------------------------------------------------
 
 app.use((req, res, next) => {
     const allowedDuringMaintenance = [
         "/api/maintenance",
         "/api/update-required",
+        "/ban-status",
         "/api/v1/ping"
     ];
 
+    const path =
+        req.path || "";
+
     if (
-        allowedDuringMaintenance.includes(
-            req.path
+        allowedDuringMaintenance.some(
+            (p) =>
+                path === p ||
+                path.startsWith(p + "/")
         )
     ) {
         return next();
@@ -174,9 +323,7 @@ app.use((req, res, next) => {
     return res.status(503).json({
         maintenance: true,
         error: "MAINTENANCE",
-        message:
-            process.env.MAINTENANCE_MESSAGE ||
-            "StumbleDark is currently under maintenance. Please try again later."
+        message: getMaintenanceMessage()
     });
 });
 
@@ -279,56 +426,6 @@ app.get(
 app.get(
     "/matchmaking/filter",
     MatchmakingController.getMatchmakingFilter
-);
-
-app.get(
-    "/ban-status/:id",
-    async (req, res) => {
-        try {
-            const id =
-                req.params.id;
-
-            let user =
-                await UserModel.findByDeviceId(
-                    id
-                );
-
-            if (!user) {
-                user =
-                    await UserModel.findByStumbleId(
-                        id
-                    );
-            }
-
-            if (!user) {
-                return res.status(200).json({
-                    isBanned: false,
-                    reason: "",
-                    bannedAt: null
-                });
-            }
-
-            return res.status(200).json({
-                isBanned:
-                    user.isBanned === true,
-                reason:
-                    user.banReason || "",
-                bannedAt:
-                    user.bannedAt || null
-            });
-        } catch (err) {
-            console.error(
-                "Ban status error:",
-                err
-            );
-
-            return res.status(500).json({
-                isBanned: false,
-                reason: "",
-                bannedAt: null
-            });
-        }
-    }
 );
 
 app.post(
@@ -690,9 +787,8 @@ app.listen(
         );
 
         Console.log(
-            "Minimum Version",
-            process.env.MINIMUM_VERSION ||
-            "1.0.0"
+            "Required Version",
+            getRequiredVersion()
         );
     }
 );
