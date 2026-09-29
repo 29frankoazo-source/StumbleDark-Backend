@@ -52,11 +52,10 @@ function isMaintenanceEnabled() {
 }
 
 function getRequiredVersion() {
-    // Prefer REQUIRED_VERSION (what you asked for); fall back to MINIMUM_VERSION
     return (
-        process.env.REQUIRED_VERSION ||
-        process.env.MINIMUM_VERSION ||
-        "1.0.0"
+        String(process.env.REQUIRED_VERSION || "1.0.0")
+            .trim()
+            .replace(/^v/i, "")
     );
 }
 
@@ -74,44 +73,14 @@ function getUpdateMessage() {
     );
 }
 
-function parseVersion(version) {
+function normalizeVersion(version) {
     if (!version) {
-        return [0, 0, 0];
+        return "";
     }
 
-    const clean =
-        String(version)
-            .trim()
-            .replace(/^v/i, "");
-
-    const parts =
-        clean.split(".");
-
-    return [
-        parseInt(parts[0], 10) || 0,
-        parseInt(parts[1], 10) || 0,
-        parseInt(parts[2], 10) || 0
-    ];
-}
-
-function compareVersions(clientVersion, minimumVersion) {
-    const client =
-        parseVersion(clientVersion);
-
-    const minimum =
-        parseVersion(minimumVersion);
-
-    for (let i = 0; i < 3; i++) {
-        if (client[i] > minimum[i]) {
-            return 1;
-        }
-
-        if (client[i] < minimum[i]) {
-            return -1;
-        }
-    }
-
-    return 0;
+    return String(version)
+        .trim()
+        .replace(/^v/i, "");
 }
 
 // ---------------------------------------------------------------------------
@@ -130,9 +99,10 @@ app.get("/api/maintenance", (req, res) => {
 });
 
 // IsUpdateRequired.cs → GET /api/update-required?version=1.7.0
+// ONLY the exact REQUIRED_VERSION is allowed. Older or newer → updateRequired=true
 app.get("/api/update-required", (req, res) => {
     const clientVersion =
-        req.query.version;
+        normalizeVersion(req.query.version);
 
     const requiredVersion =
         getRequiredVersion();
@@ -142,22 +112,16 @@ app.get("/api/update-required", (req, res) => {
 
     if (!clientVersion) {
         return res.status(400).json({
-            updateRequired: false,
+            updateRequired: true,
             error: "VERSION_MISSING",
             message:
                 "Game version was not provided."
         });
     }
 
-    const comparison =
-        compareVersions(
-            clientVersion,
-            requiredVersion
-        );
-
-    // Client is older than required → force update
+    // Exact match only — one allowed version
     const updateRequired =
-        comparison < 0;
+        clientVersion !== requiredVersion;
 
     console.log(
         "[Update Check]",
@@ -172,7 +136,6 @@ app.get("/api/update-required", (req, res) => {
     return res.status(200).json({
         updateRequired,
         clientVersion,
-        minimumVersion: requiredVersion,
         requiredVersion,
         message
     });
@@ -204,7 +167,6 @@ app.get("/ban-status/:id", async (req, res) => {
             await UserModel.findByDeviceId(id);
 
         if (!user) {
-            // Also try without dashes / case variants
             user =
                 await UserModel.findByDeviceId(
                     id.toLowerCase()
@@ -538,6 +500,11 @@ app.get(
     EconomyController.purchaseGasha
 );
 
+app.post(
+    "/economy/:currencyType/give/:amount",
+    EconomyController.giveCurrency
+);
+
 app.get(
     "/economy/purchaseluckyspin",
     EconomyController.purchaseLuckySpin
@@ -546,11 +513,6 @@ app.get(
 app.get(
     "/economy/purchasedrop/:itemId/:count",
     EconomyController.purchaseLuckySpin
-);
-
-app.post(
-    "/economy/:currencyType/give/:amount",
-    EconomyController.giveCurrency
 );
 
 app.get(
@@ -787,7 +749,7 @@ app.listen(
         );
 
         Console.log(
-            "Required Version",
+            "Required Version (exact)",
             getRequiredVersion()
         );
     }
