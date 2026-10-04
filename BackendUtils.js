@@ -2791,10 +2791,10 @@ function errorControll(err, req, res, next) {
 
 async function sendShared(req, res) {
   try {
-    const filePath = path.resolve(__dirname, "bundles", "shared.bundle");
-    const data = await fs.promises.readFile(filePath);
-    res.status(200).send(data);
-  } catch {
+    // The mobile client expects the configuration already loaded from shared.json.
+    res.status(200).json(SharedData);
+  } catch (err) {
+    Console.error('Shared', 'Error sending shared data:', err);
     res.sendStatus(500);
   }
 }
