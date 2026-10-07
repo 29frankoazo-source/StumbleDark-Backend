@@ -73,7 +73,9 @@ class Database {
   PurchasableItems: null,
   Animations: null,
   Emotes: null,
-  Footsteps: null
+  Footsteps: null,
+  Tournaments: null,
+  TournamentParticipants: null
 };
   }
 
@@ -92,6 +94,8 @@ this.collections.PurchasableItems = this.db.collection("PurchasableItems");
 this.collections.Animations = this.db.collection("Animations");
 this.collections.Emotes = this.db.collection("Emotes");
 this.collections.Footsteps = this.db.collection("Footsteps");
+this.collections.Tournaments = this.db.collection("Tournaments");
+this.collections.TournamentParticipants = this.db.collection("TournamentParticipants");
 
     await this.createIndexes();
     await this.autoPopulateSharedData();
@@ -234,6 +238,7 @@ class UserModel {
       skillRating: 0,
       experience: 0,
       crowns: 0,
+      tournamentWins: 0,
       hiddenRating: 0,
       isBanned: false,
       banReason: "",
@@ -452,6 +457,37 @@ class UserModel {
 
   static async findById(id) {
     return await database.getUserByQuery({ id: parseInt(id) });
+  }
+
+  static async getTournamentWins(userId) {
+    const user = await this.findById(userId);
+    const storedWins = parseInt(user?.tournamentWins, 10) || 0;
+
+    const completedTournaments = await database.collections.Tournaments
+      .find({ endTime: { $lte: new Date() } })
+      .project({ id: 1 })
+      .toArray();
+
+    const tournamentIds = completedTournaments.map(tournament => tournament.id);
+
+    const countedWins = tournamentIds.length > 0
+      ? await database.collections.TournamentParticipants.countDocuments({
+          userId,
+          position: 1,
+          tournamentId: { $in: tournamentIds }
+        })
+      : 0;
+
+    const tournamentWins = Math.max(countedWins, storedWins);
+
+    if (tournamentWins > storedWins) {
+      await database.collections.Users.updateOne(
+        { id: userId },
+        { $set: { tournamentWins } }
+      );
+    }
+
+    return tournamentWins;
   }
 
   static async update(stumbleId, updates) {
@@ -741,6 +777,47 @@ static async updateUsername(req, res) {
 
 
   
+  static async getTournamentWins(req, res) {
+    try {
+      let user = req.user;
+
+      if (!user) {
+        const authHeader = req.headers.authorization;
+
+        if (authHeader) {
+          try {
+            const authData = JSON.parse(authHeader);
+            const deviceId = authData.DeviceId || "";
+            const stumbleId = authData.StumbleId || "";
+
+            if (stumbleId) {
+              user = await UserModel.findByStumbleId(stumbleId);
+            }
+
+            if (!user && deviceId) {
+              user = await UserModel.findByDeviceId(deviceId);
+            }
+
+            if (!user && /^\d+$/.test(String(deviceId))) {
+              user = await UserModel.findById(deviceId);
+            }
+          } catch (e) {
+          }
+        }
+      }
+
+      if (!user) {
+        return res.status(401).json({ message: 'User not authenticated' });
+      }
+
+      const tournamentWins = await UserModel.getTournamentWins(user.id);
+      return res.status(200).json({ tournamentWins });
+    } catch (err) {
+      Console.error('TournamentWins', 'Get error:', err);
+      return res.status(500).json({ message: 'Internal server error' });
+    }
+  }
+
   static async getSettings(req, res) {
     try {
         const settings = {
@@ -2687,6 +2764,13 @@ class TournamentController {
                 { $set: { rewardsClaimed: true } }
             );
 
+            if (participation.position === 1) {
+                await database.collections.Users.updateOne(
+                    { id: user.id },
+                    { $inc: { tournamentWins: 1 } }
+                );
+            }
+
             res.json({
                 message: 'Rewards claimed successfully',
                 rewards: reward
@@ -2827,3 +2911,5 @@ module.exports = {
   VerifyPhoton,
   generatePhotonJwt
 };  
+
+
