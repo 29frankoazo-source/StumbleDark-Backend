@@ -1936,7 +1936,7 @@ class TournamentXController {
       nameKey: "BD 1v1",
       descriptionKey: "Practice your skills in the Stumble Dark TournamentX! mode!",
       listItemBackgroundImage: "Punchapalooza_Background_Image_Tournaments_Card",
-      detailsPanelBackgroundImage: "Punchapalooza_Background_Image_Tournamentss",
+      detailsPanelBackgroundImage: "Punchapalooza_Background_Image_Tournaments",
       prizeBannerColour: "#005577",
       headerColour: "#007799",
       mapListGradientColourTop: "#004466",
