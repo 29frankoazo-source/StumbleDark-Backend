@@ -396,6 +396,11 @@ app.post(
 );
 
 app.get(
+    "/user/tournament-wins",
+    UserController.getTournamentWins
+);
+
+app.get(
     "/user/config",
     sendShared
 );
@@ -754,3 +759,4 @@ app.listen(
         );
     }
 );
+
